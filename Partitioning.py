@@ -5,10 +5,15 @@ from tvm.contrib import graph_runtime
 from tvm.relay import testing
 import threading
 import time
-import os.path
+from os import path, _exit
 import copy
 import pickle
 from math import ceil, log2
+
+def PrintError(e, name):
+    print('\n[Error] Executing with %s failed' % (type, name))
+    print(e)
+    _exit(1)
 
 class CandidateDevice:
     def __init__(self, trial_cnt, diff):
@@ -29,11 +34,11 @@ class Partitioner:
         self.granularity = ceil(batch_size / self.max_steps)
 
         self.file_name = 'perf_table'
-        if os.path.exists(self.file_name):
+        if path.exists(self.file_name):
             self.perf_table_file = open(self.file_name, 'rb')
         else: self.perf_table_file = None
-        self.test_batches_cpu = [1, 2, 4, 8, 16, 32]
-        self.test_batches_gpu = [1, 2, 4, 8, 16, 32, 48, 64, 128]
+        self.test_batches_cpu = [1, 2, 4, 8, 16]
+        self.test_batches_gpu = [1, 2, 4, 8, 16, 32, 64, 128, 256]
 
         self.perf_table = {} # { 'dev_name': { perf_table }, ... }
         self.candidate_devs = []
@@ -46,8 +51,8 @@ class Partitioner:
             ctx = tvm.cpu(0)
             dev_name = ctx.device_name
             if dev_name is None:
-                # dev_name = 'Intel(R) Core(TM) i7-9700K CPU @ 3.60GHz'
-                dev_name = 'Intel(R) Core(TM) i7-8700K CPU @ 3.70GHz'
+                dev_name = 'Intel(R) Core(TM) i7-9700K CPU @ 3.60GHz'
+                # dev_name = 'Intel(R) Core(TM) i7-8700K CPU @ 3.70GHz'
             self.dev_names.append('[CPU] ' + dev_name)
 
         if enable_devs[1] == 1:
@@ -83,7 +88,7 @@ class Partitioner:
 
         return ctx, target, self.dev_names[dev_idx]
 
-    def RunDev(self, target, ctx, batch_size):
+    def RunDev(self, target, ctx, batch_size, dev_name):
         opt_level = 3
         num_class = 1000
         image_shape = (3, 224, 224)
@@ -96,12 +101,16 @@ class Partitioner:
         with relay.build_config(opt_level=opt_level):
             graph, lib, param = relay.build_module.build(mod, target, params=params)
 
-        dev = graph_runtime.create(graph, lib, ctx)
-        dev.set_input('data', data, **param)
-        dev = dev.module
-        dev = dev.time_evaluator('run', ctx, 1, 3)
-
-        return np.mean(np.array(dev().results)) * 1000 / batch_size
+        try: dev = graph_runtime.create(graph, lib, ctx) 
+        except Exception as e:
+            PrintError(e, dev_name, '')
+            batch_idx = self.test_batches.index(batch_size)
+            return -1
+        else:
+            dev.set_input('data', data, **param)
+            dev = dev.module
+            dev = dev.time_evaluator('run', ctx, 1, 3)
+            return np.mean(np.array(dev().results)) * 1000 / batch_size
 
     def CheckPerfTable(self):
         print('Checking Performance Table...')
@@ -120,13 +129,16 @@ class Partitioner:
 
             bench_time = time.time()
             dev_dict.clear()
-            if i < self.gpu_start_idx:
-                test_batches = self.test_batches_cpu
-            else:
-                test_batches = self.test_batches_gpu
-            for bs in test_batches:
+
+            if i < self.enable_devs[0]:
+                self.test_batches = self.test_batches_cpu
+            else: self.test_batches = self.test_batches_gpu
+
+            for bs in self.test_batches:
                 if bs == 0: continue
-                dev_dict[bs] = self.RunDev(target, ctx, bs)
+                result = self.RunDev(target, ctx, bs, dev_name)
+                if result < 0: break
+                else: dev_dict[bs] = result
             self.perf_table[dev_name] = copy.deepcopy(dev_dict)
             print(dev_name, dev_dict)
             new_devs += 1

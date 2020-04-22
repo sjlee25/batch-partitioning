@@ -8,7 +8,7 @@ import sys
 import time
 from math import floor
 from Partitioning import Partitioner
-# import os
+from os import _exit
 
 # Prints usage with arguments
 def PrintInfo():
@@ -54,6 +54,11 @@ work_sizes = []
 threads = []
 eval_time = 1
 
+def PrintError(e, type, idx):
+    print('\n[Error] Executing with %s %d failed' % (type, idx))
+    print(e)
+    _exit(1)
+
 # Runs inference thread with CPU
 def RunCPU(cpu_idx=0, batch_size=batch_size):
     if batch_size == 0:
@@ -72,18 +77,21 @@ def RunCPU(cpu_idx=0, batch_size=batch_size):
     ctx = tvm.cpu(cpu_idx)
     tag = 'CPU EXECUTION'
 
-    cpu = graph_runtime.create(graph, lib, ctx)
-    cpu.set_input('data', data, **param)
-    cpu = cpu.module
-    cpu = cpu.time_evaluator('run', ctx, 1, eval_time)
-
-    prof_res = np.array(cpu().results) * 1000
-
-    if num_devices > 1:
-        print('CPU %d = %7.2f ms (%7.2f ms)  |  %7.2f ms [%3d]' 
-            % (cpu_idx, np.mean(prof_res), np.std(prof_res), partitioner.estimated_time[cpu_idx], batch_size))
+    try: cpu = graph_runtime.create(graph, lib, ctx)
+    except Exception as e:
+        PrintError(e, 'CPU', cpu_idx)
     else:
-        print('CPU %d = %7.2f ms (%7.2f ms)' % (cpu_idx, np.mean(prof_res), np.std(prof_res)))
+        cpu.set_input('data', data, **param)
+        cpu = cpu.module
+        cpu = cpu.time_evaluator('run', ctx, 1, eval_time)
+
+        prof_res = np.array(cpu().results) * 1000
+
+        if num_devices > 1:
+            print('CPU %d = %7.2f ms (%7.2f ms)  |  %7.2f ms [%3d]' 
+                % (cpu_idx, np.mean(prof_res), np.std(prof_res), partitioner.estimated_time[cpu_idx], batch_size))
+        else:
+            print('CPU %d = %7.2f ms (%7.2f ms)' % (cpu_idx, np.mean(prof_res), np.std(prof_res)))
 
 # Runs inference thread with intel Integrated GPU
 def RunIGP(igp_idx=0, batch_size=batch_size):
@@ -103,18 +111,20 @@ def RunIGP(igp_idx=0, batch_size=batch_size):
     ctx = tvm.opencl(igp_idx)
     tag = 'IGP EXECUTION'
 
-    igp = graph_runtime.create(graph, lib, ctx)
-    igp.set_input('data', data, **param)
-    igp = igp.module
-    igp = igp.time_evaluator('run', ctx, 1, eval_time)
-
-    prof_res = np.array(igp().results) * 1000
-
-    if num_devices > 1:
-        print('IGP %d = %7.2f ms (%7.2f ms)  |  %7.2f ms [%3d]' 
-            % (igp_idx, np.mean(prof_res), np.std(prof_res), partitioner.estimated_time[num_cpus + igp_idx], batch_size))
+    try: igp = graph_runtime.create(graph, lib, ctx)
+    except Exception as e:
+        PrintError(e, 'IGP', igp_idx)
     else:
-        print('IGP %d = %7.2f ms (%7.2f ms)' % (igp_idx, np.mean(prof_res), np.std(prof_res)))
+        igp.set_input('data', data, **param)
+        igp = igp.module
+        igp = igp.time_evaluator('run', ctx, 1, eval_time)
+        prof_res = np.array(igp().results) * 1000
+
+        if num_devices > 1:
+            print('IGP %d = %7.2f ms (%7.2f ms)  |  %7.2f ms [%3d]' 
+                % (igp_idx, np.mean(prof_res), np.std(prof_res), partitioner.estimated_time[num_cpus + igp_idx], batch_size))
+        else:
+            print('IGP %d = %7.2f ms (%7.2f ms)' % (igp_idx, np.mean(prof_res), np.std(prof_res)))
 
 # Runs inference thread with GPU
 def RunGPU(gpu_idx=0, batch_size=batch_size):
@@ -134,18 +144,20 @@ def RunGPU(gpu_idx=0, batch_size=batch_size):
     ctx = tvm.gpu(gpu_idx)
     tag = 'GPU EXECUTION'
 
-    gpu = graph_runtime.create(graph, lib, ctx)
-    gpu.set_input('data', data, **param)
-    gpu = gpu.module
-    gpu = gpu.time_evaluator('run', ctx, 1, eval_time)
-
-    prof_res = np.array(gpu().results) * 1000
-
-    if num_devices > 1:
-        print('GPU %d = %7.2f ms (%7.2f ms)  |  %7.2f ms [%3d]' 
-            % (gpu_idx, np.mean(prof_res), np.std(prof_res), partitioner.estimated_time[num_cpus + num_igps + gpu_idx], batch_size))
+    try: gpu = graph_runtime.create(graph, lib, ctx)
+    except Exception as e:
+        PrintError(e, 'GPU', gpu_idx)
     else:
-        print('GPU %d = %7.2f ms (%7.2f ms)' % (gpu_idx, np.mean(prof_res), np.std(prof_res)))
+        gpu.set_input('data', data, **param)
+        gpu = gpu.module
+        gpu = gpu.time_evaluator('run', ctx, 1, eval_time)
+        prof_res = np.array(gpu().results) * 1000
+
+        if num_devices > 1:
+            print('GPU %d = %7.2f ms (%7.2f ms)  |  %7.2f ms [%3d]' 
+                % (gpu_idx, np.mean(prof_res), np.std(prof_res), partitioner.estimated_time[num_cpus + num_igps + gpu_idx], batch_size))
+        else:
+            print('GPU %d = %7.2f ms (%7.2f ms)' % (gpu_idx, np.mean(prof_res), np.std(prof_res)))
 
 if __name__ == '__main__':
     # Guide usage if no argument was given
@@ -178,7 +190,7 @@ if __name__ == '__main__':
         partitioner = Partitioner(batch_size, num_devs, gpu_idxs)
         partitioner.StartPartition()
         work_sizes = partitioner.partition
-    div_time = time.time() - div_time - partitioner.benchmark_time
+        div_time = time.time() - div_time - partitioner.benchmark_time
 
     if num_cpus == 1:
         t = threading.Thread(target=RunCPU, args=(i, work_sizes[0]))
