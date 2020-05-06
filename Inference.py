@@ -11,6 +11,7 @@ from os import path,_exit
 import pickle
 import sys
 import time
+import argparse
 
 # Prints usage with arguments
 def PrintHelp():
@@ -25,10 +26,10 @@ def PrintHelp():
     print('  --gi=, --gpu_index=i,j,.. : target GPU indicies to use')
     
 class Environment:
-    def __init__(self, net='vgg-16', batch_size=0, logging=False):
-        self.devices = []
+    def __init__(self, network, batch_size, devices, logging=False):
+        self.devices = copy.deepcopy(devices)
         self.batch_size = batch_size
-        self.net = net
+        self.network = network
         self.opt_level = 3
         self.test_times = 1
         self.run_times = 1
@@ -152,11 +153,10 @@ class Device:
             print('%s %d = 0 batch' % (self.dev_type, self.idx))
             return 0.0
         
-        net, params, input_shape, output_shape = env.get_network(name=env.net, batch_size=self.batch_size)
-        print('try relay build..')
+        net, params, input_shape, output_shape = env.get_network(name=env.network, batch_size=self.batch_size)
+        # Seg fault here
         with relay.build_config(opt_level=env.opt_level):
             graph, lib, params = relay.build(net, target=self.target, params=params)
-        print('graph built!')
 
         try: module = graph_runtime.create(graph, lib, self.ctx)
         except Exception as e:
@@ -173,7 +173,7 @@ class Device:
 
             if env.logging:
                 # thrput_path = self.dev_type + '_thrput.txt'
-                latency_path = env.net + '_' + self.dev_type + '_latency.txt'
+                latency_path = env.network + '_' + self.dev_type + '_latency.txt'
                 # acc_path = self.dev_type + '_acc.txt'
                 # with open(thrput_path, 'a') as log_file:
                 #     log_file.write('%f\n' % (throughput))
@@ -211,7 +211,7 @@ class Partitioner:
                 test_batches = self.test_batches_cpu
 
             if dev.name in self.perf_table and \
-                self.env.net in self.perf_table[dev.name]:
+                self.env.network in self.perf_table[dev.name]:
                     print(dev.name, 'exists in the table')
                     continue
             else:
@@ -227,8 +227,8 @@ class Partitioner:
                 dev.batch_size = batch_size
                 result = dev.Run(self.env.test_times, 'test') / batch_size
                 dev_dict[batch_size] = result
-            self.perf_table[dev.name][self.env.net] = copy.deepcopy(dev_dict)
-            print('%s (%s)\n%s' % (dev.name, self.env.net, dev_dict))
+            self.perf_table[dev.name][self.env.network] = copy.deepcopy(dev_dict)
+            print('%s (%s)\n%s' % (dev.name, self.env.network, dev_dict))
             new_devs += 1
 
             bench_time = time.time() - bench_time
@@ -283,7 +283,7 @@ class Partitioner:
         if batch_size == 0:
             return 0
 
-        dev_perf = self.perf_table[dev.name][self.env.net]
+        dev_perf = self.perf_table[dev.name][self.env.network]
         test_batches = self.test_batches_gpu
         if dev.dev_type == 'cpu':
             test_batches = self.test_batches_cpu
@@ -319,7 +319,6 @@ class Partitioner:
                 dev.eval_time = eval_time
         cur_time = max(dev_times)
 
-        print(offload_dev.name, dev_times, '/', cur_time, prev_time)
         if cur_time <= prev_time:
             offload_dev.trial = self.offload_trial
             offload_dev.all_time = cur_time
@@ -369,7 +368,6 @@ class Partitioner:
             if offload_dev is None: break
             offloaded_cnt = offload_dev.trial
             cur_time = offload_dev.all_time
-            print(offload_dev.name, cur_time, prev_time)
 
             if offloaded_cnt > 0 and cur_time <= prev_time:
                 base_dev.batch_size -= 1
@@ -377,13 +375,11 @@ class Partitioner:
                 prev_time = cur_time
                 base_dev = self.FindDev('base_next')
                 tolerate_cnt = 0
-                print('base: %s  time: %.2f' % (base_dev.name, prev_time))
             else:
                 tolerate_cnt += 1
             cnt += 1
             loop_time = time.time() - loop_time
             print("[%2d]" % (cnt), self.env.GetBatches(), "%.2f ms" % (loop_time * 1000))
-            print()
 
             if base_dev.batch_size == 1:
                 break
@@ -391,67 +387,55 @@ class Partitioner:
         for dev in self.env.devices:
             dev.predict_time = self.EstimateDevTime(dev, dev.batch_size)
         search_time = (time.time() - search_time) * 1000
-        print('Partitioning finished in %.2f ms' % (search_time))
+        print('Partitioning finished in %.2f ms\n' % (search_time))
 
 def PrintError(e, type, idx):
     print('\n[Error] Executing with %s %d failed' % (type, idx))
     print(e)
     _exit(1)
 
-def main(argv):
-    global env
-    try: opts, args = getopt.getopt(argv, 'hn:b:cig:l',
-        ['help', 'network=', 'batch=', 'cpu', 'igpu', 'num_gpus=', 'ng=', 'gpu_index=', 'gi=', 'log'])
-    except getopt.GetoptError:
-        PrintHelp()
-        exit(1)
+if __name__ == '__main__':
+    env = None
 
-    batch_size = 0
-    net = 'vgg-16'
-    use_cpu = use_igp = use_gpu = logging = False
-    gpus_str = ''
-    for opt, arg in opts:
-        if opt in ('-h', '--help'):
-            PrintHelp()
-            exit(0)
-        elif opt in ('-n', '--network'):
-            net = arg
-        elif opt in ('-b', '--batch'):
-            batch_size = int(arg)
-        elif opt in ('-c', '--cpu'):
-            use_cpu = True
-        elif opt in ('-i', '--igpu'):
-            use_igp = True
-        elif opt in ('-g', '--ng', '--num_gpus'):
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--network', type=str, choices=
+                        ['mobilenet', 'resnet-18', 'resnet-34', 'resnet-50',
+                        'vgg-16', 'vgg-19', 'inception_v3', 'densenet-121',
+                        'squeezenet_v1.0', 'squeezenet_v1.1'], 
+                        help='The name of neural network to inference')
+    parser.add_argument('--batch', type=int, help='Batch size')
+    parser.add_argument('--device', type=str, default='gpu0',
+                        help='Devices to use, give as \'cpu\', \'igpu\' or \'gpu0\'')
+    parser.add_argument('--log', type=str, choices=['enable', 'disable'], default='disable',
+                        help='Logging option for specific debugging')
+    args = parser.parse_args()
+
+    network = args.network
+    batch_size = args.batch
+    devices = []
+    arg_devs = list(args.device.split(','))
+
+    for dev in arg_devs:
+        if dev == 'cpu':
+            devices.append(Device('cpu', 0))
+        elif dev == 'igpu':
+            devices.append(Device('igp', 0))
+        elif dev.find('gpu') >= 0:
             use_gpu = True
-            num_gpu = int(arg)
-        elif opt in ('--gi', '--gpu_index'):
-            use_gpu = True
-            gpus_str = arg
-        elif opt in ('-l', '--log'):
-            logging = True
+            idx_start = dev.find('gpu') + len('gpu')
+            gpu_idx = int(dev[idx_start:])
+            if tvm.gpu(gpu_idx).exist:
+                devices.append(Device('gpu', gpu_idx))
+            else:
+                print('[Error] Device \'%s\' is unrecognizable' % dev)
+    if args.log == 'enable': logging = True
+    else: logging = False
 
-    if batch_size == 0:
-        PrintHelp()
+    if batch_size == 0 or len(devices) == 0:
+        parser.print_help(sys.stderr)
         exit(1)
 
-    env = Environment(net=net, batch_size=batch_size, logging=logging)
-    if use_cpu:
-        env.devices.append(Device('cpu', 0))
-    if use_igp:
-        env.devices.append(Device('igp', 0))
-    if use_gpu:
-        if gpus_str == '':
-            gpu_idxs = set(i for i in range(num_gpu))
-        else:
-            gpu_idxs = set(map(int, gpus_str.split(', ')))
-        for i in gpu_idxs:
-            env.devices.append(Device('gpu', i))
-
-    if use_gpu and len(gpu_idxs) < 1:
-        PrintHelp()
-        exit(1)
-
+    env = Environment(network, batch_size, devices, logging)
     threads = []
 
     elapsed_time = time.time()
@@ -477,7 +461,3 @@ def main(argv):
     # print('\nPartitioned Result:', work_sizes)
     print('All elapsed time: %.2f sec' % (elapsed_time))
     print('Partitioning time: %.2f ms' % (div_time * 1000))
-
-if __name__ == '__main__':
-    env = None
-    main(sys.argv[1:])
