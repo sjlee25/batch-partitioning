@@ -12,18 +12,6 @@ import pickle
 import sys
 import time
 import argparse
-
-# Prints usage with arguments
-def PrintHelp():
-    print('** A simple test tool for divding batch sizes with performance of each device **')
-    print('< Usage > python3 [file name] [options]')
-    print('< Options >')
-    print('  -b, --batch   : batch size')
-    print('  -n, --network : network to inference')
-    print('  -c, --cpu     : use CPU')
-    print('  -i, --igpu    : use intel iGPU')
-    print('  -g=#, --num_gpus=#        : number of GPUs to use')
-    print('  --gi=, --gpu_index=i,j,.. : target GPU indicies to use')
     
 class Environment:
     def __init__(self, network, batch_size, devices, logging=False):
@@ -140,23 +128,20 @@ class Device:
             print('[Error] Unknown Device Type %s' % (self.dev_type))
             exit(1)
 
-    def PrintResult(self):
+    # Need to think about the race condition
+    def PushResult(self):
+        global result
         string = '%s %d = %7.2f ms' % (self.dev_type, self.idx, self.exec_time)
         if self.predict_time > 0:
             string += ' | %7.2f ms' % (self.predict_time)
-        string += ' [%3d]' % (self.batch_size)
-        print(string)
+        string += ' [%3d]\n' % (self.batch_size)
+        result += string
 
-    def Run(self, repeat_time=1, mode=''):
-        global env
+    def Run(self, graph, lib, params, input_shape, repeat_time=1, mode=''):
+        global env, result
         if self.batch_size == 0:
-            print('%s %d = 0 batch' % (self.dev_type, self.idx))
+            result += '%s %d = 0 batch\n' % (self.dev_type, self.idx)
             return 0.0
-        
-        net, params, input_shape, output_shape = env.get_network(name=env.network, batch_size=self.batch_size)
-        # Seg fault here
-        with relay.build_config(opt_level=env.opt_level):
-            graph, lib, params = relay.build(net, target=self.target, params=params)
 
         try: module = graph_runtime.create(graph, lib, self.ctx)
         except Exception as e:
@@ -168,7 +153,7 @@ class Device:
 
         self.exec_time = np.mean(np.array(timer().results)) * 1000
         if mode != 'test':
-            self.PrintResult()
+            self.PushResult()
             # throughput = self.batch_size / self.exec_time * 1000
 
             if env.logging:
@@ -414,9 +399,11 @@ if __name__ == '__main__':
     batch_size = args.batch
     devices = []
     arg_devs = list(args.device.split(','))
+    use_cpu = False
 
     for dev in arg_devs:
         if dev == 'cpu':
+            use_cpu = True
             devices.append(Device('cpu', 0))
         elif dev == 'igpu':
             devices.append(Device('igp', 0))
@@ -450,8 +437,19 @@ if __name__ == '__main__':
         partitioner.StartPartition()
         div_time = time.time() - div_time - partitioner.benchmark_time
 
+    if use_cpu:
+        for idx in range(len(env.devices)):
+            if env.devices[idx].dev_type == 'cpu':
+                env.devices.insert(len(env.devices)-1, env.devices.pop(idx))
+                break
+
+    result = ''
     for dev in env.devices:
-        t = threading.Thread(target=dev.Run)
+        net, params, input_shape, output_shape = \
+            env.get_network(name=env.network, batch_size=dev.batch_size)
+        with relay.build_config(opt_level=env.opt_level):
+            graph, lib, params = relay.build(net, target=dev.target, params=params)
+        t = threading.Thread(target=dev.Run, args=(graph, lib, params, input_shape))
         threads.append(t)
         t.start()
     for t in threads:
@@ -459,5 +457,6 @@ if __name__ == '__main__':
 
     elapsed_time = time.time() - elapsed_time
     # print('\nPartitioned Result:', work_sizes)
+    print(result)
     print('All elapsed time: %.2f sec' % (elapsed_time))
     print('Partitioning time: %.2f ms' % (div_time * 1000))
