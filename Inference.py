@@ -21,7 +21,7 @@ class Environment:
         self.network = network
         self.opt_level = 3
         self.test_times = 1
-        self.run_times = 1
+        self.run_times = 3
         self.logging = logging
 
     def GetBatches(self):
@@ -245,7 +245,7 @@ if __name__ == '__main__':
             graph, lib, params = relay.build(net, target=dev.target, params=params)
         build_time = time.time() - build_time
         print('<%s> build time: %.3f sec' % (dev.name, build_time))
-        t = threading.Thread(target=dev.Run, args=(graph, lib, params, input_shape))
+        t = threading.Thread(target=dev.Run, args=(graph, lib, params, input_shape, env.run_times))
         threads.append(t)
         t.start()
     for t in threads:
