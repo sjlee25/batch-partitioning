@@ -13,6 +13,8 @@ import sys
 import threading
 import time
 from Partition import Partitioner
+
+import openpyxl # for excel logging
     
 class Environment:
     def __init__(self, network, batch_size, devices, logging=False):
@@ -73,14 +75,6 @@ class Environment:
         elif "squeezenet" in name:
             version = name.split("_v")[1]
             net, params = testing.squeezenet.get_workload(batch_size=batch_size, version=version, dtype=dtype)
-        # elif name == 'mxnet':
-        #     # an example for mxnet model
-        #     from mxnet.gluon.model_zoo.vision import get_model
-        #     block = get_model('resnet18_v1', pretrained=True)
-        #     net, params = relay.frontend.from_mxnet(block, shape={'data': input_shape}, dtype=dtype)
-        #     net = net["main"]
-        #     net = relay.Function(net.params, relay.nn.softmax(net.body), None, net.type_params, net.attrs)
-        #     net = relay.Module.from_expr(net)
         else:
             raise ValueError("Unsupported network: " + name)
 
@@ -108,8 +102,8 @@ class Device:
             self.target = 'llvm'
             dev_name = self.ctx.device_name
             if dev_name is None:
-                # dev_name = 'Intel(R) Core(TM) i7-9700K CPU @3.60GHz'
-                dev_name = 'Intel(R) Core(TM) i7-8700K CPU @3.60GHz'
+                dev_name = 'Intel(R) Core(TM) i7-9700K CPU @3.60GHz'
+                # dev_name = 'Intel(R) Core(TM) i7-8700K CPU @3.60GHz'
             self.name = '[CPU] ' + dev_name
         
         elif self.dev_type == 'igp':
@@ -158,19 +152,18 @@ class Device:
         self.exec_time = np.mean(np.array(timer().results)) * 1000
         if mode != 'test':
             self.PushResult()
-            # throughput = self.batch_size / self.exec_time * 1000
 
             if env.logging:
-                # thrput_path = self.dev_type + '_thrput.txt'
-                latency_path = env.network + '_' + self.dev_type + '_latency.txt'
-                # acc_path = self.dev_type + '_acc.txt'
-                # with open(thrput_path, 'a') as log_file:
-                #     log_file.write('%f\n' % (throughput))
-                with open(latency_path, 'a') as log_file:
-                    log_file.write('%f\n' % (self.exec_time))
-                # print('[log] (%d) throughput: %.3f  latency: %.3f' % (self.batch_size, throughput, self.exec_time))
-                # with open(acc_path, 'a') as log_file:
-                #     log_file.write('%f\n' % ((self.exec_time - self.predict_time) / self.exec_time * 100))
+                file_name = 'log.xlsx'
+                if path.exists(file_name):
+                    book = openpyxl.load_workbook(file_name)
+                    sheet = book[env.network]
+                else:
+                    book = openpyxl.Workbook()
+                    sheet = book.create_sheet(env.network)
+                for i in range(len(env.devices)):
+                    sheet[str(chr(i + 65)) + str(batch_size)] = env.devices[i].batch_size
+                book.save(file_name)
 
         return self.exec_time
 
@@ -238,6 +231,8 @@ if __name__ == '__main__':
 
     result = ''
     for dev in env.devices:
+        if dev.batch_size == 0: continue
+
         build_time = time.time()
         net, params, input_shape, output_shape = \
             env.get_network(name=env.network, batch_size=dev.batch_size)
@@ -245,9 +240,11 @@ if __name__ == '__main__':
             graph, lib, params = relay.build(net, target=dev.target, params=params)
         build_time = time.time() - build_time
         print('<%s> build time: %.3f sec' % (dev.name, build_time))
+
         t = threading.Thread(target=dev.Run, args=(graph, lib, params, input_shape, env.run_times))
         threads.append(t)
         t.start()
+
     for t in threads:
         t.join()
 

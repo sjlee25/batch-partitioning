@@ -98,6 +98,7 @@ class Partitioner:
             elif attr == 'base_init': # Min Time
                 batch_size = self.env.batch_size
                 dev_time = self.EstimateDevTime(dev, batch_size)
+                print(dev.name, dev_time)
                 if dev_time < min_val:
                     best_dev = dev
                     min_val = dev_time
@@ -131,8 +132,8 @@ class Partitioner:
             if batch_size < test_batches[i]:
                 table_idx = i - 1
                 break
-        if i == len(test_batches):
-            table_idx = len(test_batches) - 2
+        if i == len(test_batches)-1:
+            table_idx = len(test_batches)-2
         
         xp = [test_batches[table_idx], test_batches[table_idx+1]]
         yp = [dev_perf[xp[0]], dev_perf[xp[1]]]
