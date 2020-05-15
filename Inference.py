@@ -157,7 +157,9 @@ class Device:
                 file_name = 'log.xlsx'
                 if path.exists(file_name):
                     book = openpyxl.load_workbook(file_name)
-                    sheet = book[env.network]
+                    if env.network in book:
+                        sheet = book[env.network]
+                    else: sheet = book.create_sheet(env.network)
                 else:
                     book = openpyxl.Workbook()
                     sheet = book.create_sheet(env.network)

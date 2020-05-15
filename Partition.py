@@ -83,7 +83,6 @@ class Partitioner:
         
         for dev in self.env.devices:
             if attr == 'min_all': # Min Time
-                print(dev.all_time)
                 if dev.all_time == float('inf'):
                     continue
                 if dev.all_time <= min_val:
@@ -98,7 +97,6 @@ class Partitioner:
             elif attr == 'base_init': # Min Time
                 batch_size = self.env.batch_size
                 dev_time = self.EstimateDevTime(dev, batch_size)
-                print(dev.name, dev_time)
                 if dev_time < min_val:
                     best_dev = dev
                     min_val = dev_time
