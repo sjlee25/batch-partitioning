@@ -219,7 +219,6 @@ class Partitioner:
                 prev_time = cur_time
                 base_dev = self.FindDev('base_next')
                 tolerate_cnt = 0
-                print('')
             else:
                 tolerate_cnt += 1
             cnt += 1
