@@ -8,7 +8,6 @@ import getopt
 from math import floor, ceil, log2
 import numpy as np
 from os import path,_exit
-import pickle
 import sys
 import threading
 import time
@@ -99,35 +98,37 @@ class Device:
     def GetDevInfo(self):
         if self.dev_type == 'cpu':
             self.ctx = tvm.cpu(self.idx)
-            self.target = 'llvm'
+            # self.target = 'llvm'
+            self.target = 'llvm -mcpu=core-avx2' # reduces CPU time to half
             dev_name = self.ctx.device_name
             if dev_name is None:
                 dev_name = 'Intel(R) Core(TM) i7-9700K CPU @3.60GHz'
                 # dev_name = 'Intel(R) Core(TM) i7-8700K CPU @3.60GHz'
-            self.name = '[CPU] ' + dev_name
         
-        elif self.dev_type == 'igp':
+        elif self.dev_type == 'igpu':
             self.ctx = tvm.opencl(self.idx)
             self.target = tvm.target.intel_graphics()
+            # self.target = tvm.target.intel_graphics(model='Intel® Processor Graphics Gen9')
             dev_name = self.ctx.device_name
-            self.name = '[IGPU] ' + dev_name
 
         elif self.dev_type == 'gpu':
             cudaInit = tvm.get_global_func('cudaInit')
             cudaInit(self.idx)
             self.ctx = tvm.gpu(self.idx)
-            self.target = 'cuda'
+            # self.target = 'cuda'
+            self.target = 'cuda -device=1080ti'
             dev_name = self.ctx.device_name
-            self.name = '[GPU] ' + dev_name
 
         else:
             print('[Error] Unknown Device Type %s' % (self.dev_type))
             exit(1)
 
+        self.name = '[%s] '%(self.dev_type.upper()) + dev_name
+
     # Need to think about the race condition
     def PushResult(self):
         global result
-        string = '%s %d = %7.2f ms' % (self.dev_type, self.idx, self.exec_time)
+        string = '%4s %d = %7.2f ms' % (self.dev_type.upper(), self.idx, self.exec_time)
         if self.predict_time > 0:
             string += ' | %7.2f ms' % (self.predict_time)
         string += ' [%3d]\n' % (self.batch_size)
@@ -141,9 +142,11 @@ class Device:
 
         try: module = graph_runtime.create(graph, lib, self.ctx)
         except Exception as e:
-            print('\n[Error] Executing with %s %d failed' % (type, idx))
-            print(e)
-            _exit(1)
+            dev_type = self.dev_type.upper()
+            print('\n[Error] Executing with %s (%s %d) failed'
+                % (self.name.replace('[%s] '%(dev_type), ''), dev_type, self.idx))
+            if mode == 'test': return -1
+            else: _exit(1)
 
         data = tvm.nd.array((np.random.uniform(size=input_shape)).astype('float32'))
         module.set_input('data', data, **params)
@@ -185,24 +188,45 @@ if __name__ == '__main__':
 
     network = args.network
     batch_size = args.batch
-    devices = []
     arg_devs = list(args.device.split(','))
-    use_cpu = False
+    use_cpu = use_igp = False
 
+    devices = []
+    gpus = []
+    cpu = igpu = None
+    cpu_idx = igpu_idx = -1
+
+    # Check available devices
     for dev in arg_devs:
         if dev == 'cpu':
             use_cpu = True
-            devices.append(Device('cpu', 0))
+            if tvm.cpu(0).exist:
+                cpu = Device('cpu', 0)
+            else: print('[Error] Device \'%s\' is unrecognizable' % dev)
+
         elif dev == 'igpu':
-            devices.append(Device('igp', 0))
+            use_igp = True
+            if tvm.opencl(0).exist:
+                igpu = Device('igpu', 0)
+            else: print('[Error] Device \'%s\' is unrecognizable' % dev)
+
         elif dev.find('gpu') >= 0:
-            use_gpu = True
             idx_start = dev.find('gpu') + len('gpu')
             gpu_idx = int(dev[idx_start:])
             if tvm.gpu(gpu_idx).exist:
-                devices.append(Device('gpu', gpu_idx))
-            else:
-                print('[Error] Device \'%s\' is unrecognizable' % dev)
+                gpus.append(Device('gpu', gpu_idx))
+            else: print('[Error] Device \'%s\' is unrecognizable' % dev)
+
+    # Add devices
+    if cpu is not None:
+        cpu_idx = len(devices)
+        devices.append(cpu)
+    if igpu is not None:
+        igpu_idx = len(devices)
+        devices.append(igpu)
+    if len(gpus) > 0:
+        devices.extend(gpus)
+
     if args.log == 'enable': logging = True
     else: logging = False
 
@@ -225,23 +249,23 @@ if __name__ == '__main__':
         partitioner.StartPartition()
         div_time = time.time() - div_time - partitioner.benchmark_time
 
-    if use_cpu:
-        for idx in range(len(env.devices)):
-            if env.devices[idx].dev_type == 'cpu':
-                env.devices.insert(len(env.devices)-1, env.devices.pop(idx))
-                break
+    # Schedule build order for effective sequential builds
+    if igpu_idx >= 0:
+        env.devices.insert(len(env.devices)-1, env.devices.pop(igpu_idx))
+    if cpu_idx >= 0:
+        env.devices.insert(len(env.devices)-1, env.devices.pop(cpu_idx))
 
     result = ''
     for dev in env.devices:
         if dev.batch_size == 0: continue
 
-        build_time = time.time()
+        # build_time = time.time()
         net, params, input_shape, output_shape = \
             env.get_network(name=env.network, batch_size=dev.batch_size)
         with relay.build_config(opt_level=env.opt_level):
             graph, lib, params = relay.build(net, target=dev.target, params=params)
-        build_time = time.time() - build_time
-        print('<%s> build time: %.3f sec' % (dev.name, build_time))
+        # build_time = time.time() - build_time
+        # print('<%s> build time: %.3f sec' % (dev.name, build_time))
 
         t = threading.Thread(target=dev.Run, args=(graph, lib, params, input_shape, env.run_times))
         threads.append(t)

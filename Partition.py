@@ -5,7 +5,7 @@ from tvm.relay import testing
 import copy
 from math import floor, ceil, log2
 import numpy as np
-from os import path,_exit
+from os import path, _exit
 import pickle
 import threading
 import time
@@ -14,12 +14,13 @@ class Partitioner:
     def __init__(self, env):
         self.env = env
         self.table_path = 'perf_table'
-        self.test_batches_cpu = [1, 2, 3, 4, 7, 8, 9, 15, 16, 17]
-        self.test_batches_gpu = [1, 2, 3, 4, 7, 8, 9, 15, 16, 17, 31, 32, 33, 63, 64, 65, 100]
+        self.test_batches_cpu = [1, 2, 3, 4, 7, 8, 9, 15, 16, 17, 31, 32, 33]
+        self.test_batches_gpu = [1, 2, 3, 4, 7, 8, 9, 15, 16, 17, 31, 32, 33, 63, 64, 65, 127, 128, 129]
 
         self.perf_table = {} # { 'dev_name': { perf_table }, ... }
         self.benchmark_time = 0.0
         self.offload_trial = 1
+        self.tolerate_limit = 2
         
     def CheckPerfTable(self):
         dev_dict = {}
@@ -138,25 +139,33 @@ class Partitioner:
         
         return np.interp(batch_size, xp, yp) * batch_size
 
-    def OffloadDev(self, offload_dev, base_dev, prev_time):
+    def OffloadDev(self, offload_dev, base_dev, max_time):
         if self.offload_trial > base_dev.batch_size:
             return
         
         dev_times = []
         for dev in self.env.devices:
+            if dev == base_dev: continue
+
             batch_size = dev.batch_size
             if dev == offload_dev:
                 batch_size += self.offload_trial
             eval_time = self.EstimateDevTime(dev, batch_size)
-            dev_times.append(eval_time)
+            
             if dev == offload_dev:
                 dev.eval_time = eval_time
-        cur_time = max(dev_times)
+            dev_times.append(eval_time)
 
-        if cur_time <= prev_time:
-            offload_dev.trial = self.offload_trial
-            offload_dev.all_time = cur_time
-            offload_dev.diff = cur_time - dev.eval_time
+        # print(offload_dev.name, 'prev:', prev_time)
+        # print(dev_times)
+
+        for dev_time in dev_times:
+            if dev_time > max_time:
+                return
+
+        offload_dev.trial = self.offload_trial
+        offload_dev.all_time = max_time
+        offload_dev.diff = max_time - offload_dev.eval_time
 
     def StartPartition(self):
         self.CheckPerfTable()
@@ -175,7 +184,7 @@ class Partitioner:
         threads = []
 
         search_time = time.time()
-        while tolerate_cnt < 5:
+        while tolerate_cnt < self.tolerate_limit:
             loop_time = time.time()
             
             self.offload_trial = pow(2, tolerate_cnt)
@@ -184,10 +193,11 @@ class Partitioner:
                 dev.diff = float('-inf')
 
             base_dev.batch_size -= self.offload_trial
+            max_time = self.EstimateDevTime(base_dev, base_dev.batch_size)
             if len(self.env.devices) > 2:
                 for dev in self.env.devices:
                     if dev == base_dev: continue
-                    t = threading.Thread(target=self.OffloadDev, args=(dev, base_dev, prev_time))
+                    t = threading.Thread(target=self.OffloadDev, args=(dev, base_dev, max_time))
                     threads.append(t)
                     t.start()
                 for t in threads:
@@ -209,6 +219,7 @@ class Partitioner:
                 prev_time = cur_time
                 base_dev = self.FindDev('base_next')
                 tolerate_cnt = 0
+                print('')
             else:
                 tolerate_cnt += 1
             cnt += 1
