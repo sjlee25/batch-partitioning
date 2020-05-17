@@ -14,8 +14,8 @@ class Partitioner:
     def __init__(self, env):
         self.env = env
         self.table_path = 'perf_table'
-        self.test_batches_cpu = [1, 2, 3, 4, 7, 8, 9, 15, 16, 17, 31, 32, 33]
-        self.test_batches_gpu = [1, 2, 3, 4, 7, 8, 9, 15, 16, 17, 31, 32, 33, 63, 64, 65, 127, 128, 129]
+        self.test_batches_cpu = [1, 2, 3, 4, 5, 7, 8, 9, 15, 16, 17, 31, 32, 33, 63, 64, 65]
+        self.test_batches_gpu = [1, 2, 3, 4, 5, 7, 8, 9, 15, 16, 17, 31, 32, 33, 63, 64, 65, 127, 128, 129, 255, 256, 257]
 
         self.perf_table = {} # { 'dev_name': { perf_table }, ... }
         self.benchmark_time = 0.0
@@ -52,17 +52,19 @@ class Partitioner:
                 if batch_size == 0: continue
                 dev.batch_size = batch_size
 
-                build_time = time.time()
+                # build_time = time.time()
                 net, params, input_shape, output_shape = \
                     self.env.get_network(name=self.env.network, batch_size=dev.batch_size)
                 with relay.build_config(opt_level=self.env.opt_level):
                     graph, lib, params = relay.build(net, target=dev.target, params=params)
-                build_time = time.time() - build_time
-                print('<%s> build time: %.3f sec' % (dev.name, build_time))
+                # build_time = time.time() - build_time
+                # print('<%s> build time: %.3f sec' % (dev.name, build_time))
 
                 result = dev.Run(graph, lib, params, input_shape, 
                                 self.env.test_times, 'test') / batch_size
+                if result <= 0: break
                 dev_dict[batch_size] = result
+
             self.perf_table[dev.name][self.env.network] = copy.deepcopy(dev_dict)
             print('%s (%s)\n%s' % (dev.name, self.env.network, dev_dict))
             new_devs += 1
@@ -122,21 +124,18 @@ class Partitioner:
         test_batches = self.test_batches_gpu
         if dev.dev_type == 'cpu':
             test_batches = self.test_batches_cpu
+        
+        max_key = max(dev_perf.keys())
+        if batch_size > max_key:
+            return dev_perf[max_key] * batch_size
 
-        table_idx = 0
-        for i in range(len(test_batches)):
-            if test_batches[i] == batch_size:
-                return dev_perf[batch_size] * batch_size
-                break
-            if batch_size < test_batches[i]:
-                table_idx = i - 1
-                break
-        if i == len(test_batches)-1:
-            table_idx = len(test_batches)-2
-        
-        xp = [test_batches[table_idx], test_batches[table_idx+1]]
+        if batch_size in dev_perf:
+            return dev_perf[batch_size] * batch_size
+
+        min_val = 2**int(log2(batch_size))+1
+        max_val = 2*(min_val-1)-1
+        xp = [min_val, max_val]
         yp = [dev_perf[xp[0]], dev_perf[xp[1]]]
-        
         return np.interp(batch_size, xp, yp) * batch_size
 
     def OffloadDev(self, offload_dev, base_dev, max_time):
@@ -156,9 +155,6 @@ class Partitioner:
                 dev.eval_time = eval_time
             dev_times.append(eval_time)
 
-        # print(offload_dev.name, 'prev:', prev_time)
-        # print(dev_times)
-
         for dev_time in dev_times:
             if dev_time > max_time:
                 return
@@ -176,7 +172,6 @@ class Partitioner:
 
         base_dev = self.FindDev('base_init')
         base_dev.batch_size = self.env.batch_size
-        prev_time = self.EstimateDevTime(base_dev, base_dev.batch_size)
 
         cnt = 0
         offloaded_cnt = 1
@@ -205,19 +200,17 @@ class Partitioner:
             else: # threads are not needed
                 for dev in self.env.devices:
                     if dev == base_dev: continue
-                    self.OffloadDev(dev, base_dev, prev_time)
+                    self.OffloadDev(dev, base_dev, max_time)
             base_dev.batch_size += self.offload_trial
 
             offload_dev = self.FindDev('max_diff')
             if offload_dev is None: break
             offloaded_cnt = offload_dev.trial
-            cur_time = offload_dev.all_time
 
-            if offloaded_cnt > 0 and cur_time <= prev_time:
-                base_dev.batch_size -= 1
-                offload_dev.batch_size += 1
-                prev_time = cur_time
-                base_dev = self.FindDev('base_next')
+            if offloaded_cnt > 0:
+                base_dev.batch_size -= offloaded_cnt
+                offload_dev.batch_size += offloaded_cnt
+                # base_dev = self.FindDev('base_next')
                 tolerate_cnt = 0
             else:
                 tolerate_cnt += 1

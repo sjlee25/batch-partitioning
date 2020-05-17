@@ -8,14 +8,19 @@ if __name__ == '__main__':
     with open('perf_table', 'rb') as file:
         perf_dict = pickle.load(file)
         new_dict = copy.deepcopy(perf_dict)
-        dev_type = sys.argv[1].upper()
-        print('Pop %ss from the table...' % (dev_type))
+        dev_name = sys.argv[1]
+        network = sys.argv[2]
+        print('Pop %s data of %ss from the table...' % (network, dev_name))
 
-        type_str = '[%s] ' % (dev_type)
         for dev in perf_dict:
-            if type_str in dev:
-                new_dict.pop(dev, None)
-                pop_cnt += 1
+            if dev_name in dev:
+                if network == 'all':
+                    new_dict.pop(dev, None)
+                    pop_cnt += 1
+                else:
+                    if network in perf_dict[dev]:
+                        new_dict[dev].pop(network, None)
+                        pop_cnt += 1
 
     if pop_cnt > 0:
         with open('perf_table', 'wb') as file:
@@ -23,4 +28,5 @@ if __name__ == '__main__':
         print(new_dict.keys())
     
     else:
-        print('Failed: No %s in the table' % (dev_type))
+        print('Failed: No %s (%s) in the table' % (dev_name, network)
+)
