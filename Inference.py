@@ -22,7 +22,7 @@ class Environment:
         self.network = network
         self.opt_level = 3
         self.test_times = 1
-        self.run_times = 3
+        self.run_times = 1
         self.logging = logging
 
     def GetBatches(self):
@@ -94,6 +94,7 @@ class Device:
         self.eval_time = 0.0
         self.trial = 0
         self.diff = 0.0
+        self.prev_bt = 0.0
 
     def GetDevInfo(self):
         if self.dev_type == 'cpu':
@@ -116,7 +117,7 @@ class Device:
             cudaInit(self.idx)
             self.ctx = tvm.gpu(self.idx)
             # self.target = 'cuda'
-            self.target = 'cuda -device=1080ti'
+            self.target = 'cuda -device=1050ti'
             dev_name = self.ctx.device_name
 
         else:
