@@ -1,83 +1,35 @@
 import tvm
 from tvm import relay
 from tvm.contrib import graph_runtime
-from tvm.relay import testing
+from util import get_network
 import argparse
 import copy
 import getopt
 from math import floor, ceil, log2
 import numpy as np
+import openpyxl
 from os import path,_exit
 import sys
 import threading
 import time
 from Partition import Partitioner
 
-import openpyxl # for excel logging
-    
 class Environment:
-    def __init__(self, network, batch_size, devices, logging=False):
+    def __init__(self, network, batch_size, devices, log_path=''):
         self.devices = copy.deepcopy(devices)
         self.batch_size = batch_size
         self.network = network
         self.opt_level = 3
         self.test_times = 1
         self.run_times = 1
-        self.logging = logging
+
+        self.log_path = log_path
 
     def GetBatches(self):
         batches = []
         for dev in self.devices:
             batches.append(dev.batch_size)
         return batches
-
-    def get_network(self, name, batch_size, dtype='float32'):
-        """Get the symbol definition and random weight of a network
-
-        Parameters
-        ----------
-        name: str
-            The name of the network, can be 'resnet-18', 'resnet-50', 'vgg-16', 'inception_v3', 'mobilenet', ...
-        batch_size: int
-            batch size
-        dtype: str
-            Data type
-
-        Returns
-        -------
-        net: relay.Module
-            The relay function of network definition
-        params: dict
-            The random parameters for benchmark
-        input_shape: tuple
-            The shape of input tensor
-        output_shape: tuple
-            The shape of output tensor
-        """
-        input_shape = (batch_size, 3, 224, 224)
-        output_shape = (batch_size, 1000)
-
-        if name == 'mobilenet':
-            net, params = testing.mobilenet.get_workload(batch_size=batch_size, dtype=dtype)
-        elif name == 'inception_v3':
-            input_shape = (batch_size, 3, 299, 299)
-            net, params = testing.inception_v3.get_workload(batch_size=batch_size, dtype=dtype)
-        elif "resnet" in name:
-            n_layer = int(name.split('-')[1])
-            net, params = testing.resnet.get_workload(num_layers=n_layer, batch_size=batch_size, dtype=dtype)
-        elif "vgg" in name:
-            n_layer = int(name.split('-')[1])
-            net, params = testing.vgg.get_workload(num_layers=n_layer, batch_size=batch_size, dtype=dtype)
-        elif "densenet" in name:
-            n_layer = int(name.split('-')[1])
-            net, params = testing.densenet.get_workload(densenet_size=n_layer, batch_size=batch_size, dtype=dtype)
-        elif "squeezenet" in name:
-            version = name.split("_v")[1]
-            net, params = testing.squeezenet.get_workload(batch_size=batch_size, version=version, dtype=dtype)
-        else:
-            raise ValueError("Unsupported network: " + name)
-
-        return net, params, input_shape, output_shape
 
 class Device:
     def __init__(self, dev_type='', idx=0):
@@ -89,7 +41,6 @@ class Device:
         self.exec_time = 0.0
         self.predict_time = 0.0
 
-        # For partitioning
         self.eval_time = 0.0
         self.trial = 0
         self.diff = 0.0
@@ -98,7 +49,7 @@ class Device:
         if self.dev_type == 'cpu':
             self.ctx = tvm.cpu(self.idx)
             # self.target = 'llvm'
-            self.target = 'llvm -mcpu=core-avx2' # reduces CPU time to half
+            self.target = 'llvm -mcpu=core-avx2'
             dev_name = self.ctx.device_name
             if dev_name is None:
                 dev_name = 'Intel(R) Core(TM) i7-9700K CPU @3.60GHz'
@@ -124,7 +75,6 @@ class Device:
 
         self.name = '[%s] '%(self.dev_type.upper()) + dev_name
 
-    # Need to think about the race condition
     def PushResult(self):
         global result
         string = '%4s %d = %7.2f ms' % (self.dev_type.upper(), self.idx, self.exec_time)
@@ -155,10 +105,9 @@ class Device:
         if mode != 'test':
             self.PushResult()
 
-            if env.logging:
-                file_name = 'log.xlsx'
-                if path.exists(file_name):
-                    book = openpyxl.load_workbook(file_name)
+            if env.log_path != '':
+                if path.exists(env.log_path):
+                    book = openpyxl.load_workbook(env.log_path)
                     if env.network in book:
                         sheet = book[env.network]
                     else: sheet = book.create_sheet(env.network)
@@ -171,7 +120,7 @@ class Device:
                 if self.dev_type == 'gpu': idx += self.idx
                 sheet[str(chr(idx + 65)) + str(env.batch_size)] = self.batch_size
                 sheet[str(chr(idx + 65 + len(env.devices))) + str(batch_size)] = self.exec_time
-                book.save(file_name)
+                book.save(env.log_path)
 
         return self.exec_time
 
@@ -184,15 +133,14 @@ if __name__ == '__main__':
                         help='The name of neural network to inference')
     parser.add_argument('--batch', type=int, help='Batch size')
     parser.add_argument('--device', type=str, default='gpu0',
-                        help='Devices to use, give as \'cpu\', \'igpu\' or \'gpu0\'')
-    parser.add_argument('--log', type=str, choices=['enable', 'disable'], default='disable',
-                        help='Logging option for specific debugging')
+                        help='Devices to use, give as \'cpu\', \'igpu\' or \'gpu0\' successively')
+    parser.add_argument('--log', type=str, default='',
+                        help='File path for logging')
     args = parser.parse_args()
 
     network = args.network
     batch_size = args.batch
     arg_devs = list(args.device.split(','))
-    use_cpu = use_igp = False
 
     devices = []
     gpus = []
@@ -202,13 +150,11 @@ if __name__ == '__main__':
     # Check available devices
     for dev in arg_devs:
         if dev == 'cpu':
-            use_cpu = True
             if tvm.cpu(0).exist:
                 cpu = Device('cpu', 0)
             else: print('[Error] Device \'%s\' is unrecognizable' % dev)
 
         elif dev == 'igpu':
-            use_igp = True
             if tvm.opencl(0).exist:
                 igpu = Device('igpu', 0)
             else: print('[Error] Device \'%s\' is unrecognizable' % dev)
@@ -230,16 +176,12 @@ if __name__ == '__main__':
     if len(gpus) > 0:
         devices.extend(gpus)
 
-    if args.log == 'enable': logging = True
-    else: logging = False
-
     if batch_size == 0 or len(devices) == 0:
         parser.print_help(sys.stderr)
         exit(1)
 
-    env = Environment(network, batch_size, devices, logging)
+    env = Environment(network, batch_size, devices, args.log)
     threads = []
-
     elapsed_time = time.time()
     div_time = 0.0
     
@@ -264,7 +206,7 @@ if __name__ == '__main__':
 
         # build_time = time.time()
         net, params, input_shape, output_shape = \
-            env.get_network(name=env.network, batch_size=dev.batch_size)
+            get_network(name=env.network, batch_size=dev.batch_size)
         with relay.build_config(opt_level=env.opt_level):
             graph, lib, params = relay.build(net, target=dev.target, params=params)
         # build_time = time.time() - build_time
@@ -273,12 +215,10 @@ if __name__ == '__main__':
         t = threading.Thread(target=dev.Run, args=(graph, lib, params, input_shape, env.run_times))
         threads.append(t)
         t.start()
-
     for t in threads:
         t.join()
 
     elapsed_time = time.time() - elapsed_time
-    # print('\nPartitioned Result:', work_sizes)
     print(result)
     print('All elapsed time: %.2f sec' % (elapsed_time))
     print('Partitioning time: %.2f ms' % (div_time * 1000))
