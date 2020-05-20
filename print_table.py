@@ -1,16 +1,19 @@
 import pickle
+import sys
 
-file = open('perf_table', 'rb')
+file = open(sys.argv[1], 'rb')
 table = pickle.load(file)
 
 for dev in table:
     print('Device: %s' % (dev))
     dev_dict = table[dev]
-    for net in dev_dict:
-        print('  Network: %s' % (net))
+    net_list = list(dev_dict.keys())
+    net_list.sort()
 
+    for net in net_list:
+        print('  Network: %s' % (net))
         keys = sorted(dev_dict[net].keys())
         for i in keys:
-            print('    [%2d] %6.2f ms/batch' % (i, dev_dict[net][i]))
+            print('    [%3d] %6.2f ms/batch' % (i, dev_dict[net][i]))
         print()
 

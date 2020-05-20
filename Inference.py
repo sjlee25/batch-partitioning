@@ -90,11 +90,9 @@ class Device:
         self.predict_time = 0.0
 
         # For partitioning
-        self.all_time = 0.0
         self.eval_time = 0.0
         self.trial = 0
         self.diff = 0.0
-        self.prev_bt = 0.0
 
     def GetDevInfo(self):
         if self.dev_type == 'cpu':
@@ -167,8 +165,12 @@ class Device:
                 else:
                     book = openpyxl.Workbook()
                     sheet = book.create_sheet(env.network)
-                for i in range(len(env.devices)):
-                    sheet[str(chr(i + 65)) + str(batch_size)] = env.devices[i].batch_size
+
+                types = ['cpu', 'igpu', 'gpu']
+                idx = types.index(self.dev_type)
+                if self.dev_type == 'gpu': idx += self.idx
+                sheet[str(chr(idx + 65)) + str(env.batch_size)] = self.batch_size
+                sheet[str(chr(idx + 65 + len(env.devices))) + str(batch_size)] = self.exec_time
                 book.save(file_name)
 
         return self.exec_time

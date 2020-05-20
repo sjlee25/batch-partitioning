@@ -20,9 +20,11 @@ class Partitioner:
         
         self.benchmark_time = 0.0
         self.offload_trial = 1
-        self.tolerate_limit = 5
+        self.tolerate_limit = 3
         self.base_var_limit = 5
-        self.max_thresh = 1.05
+        self.test_limit = 5
+        self.test_thresh = 2.0
+        self.part_thresh = 1.05
         
     def CheckPerfTable(self):
         dev_dict = {}
@@ -47,13 +49,17 @@ class Partitioner:
                     self.perf_table[dev.name] = {}
                 print('testing', dev.name, '...')
 
-            bench_time = time.time()
             dev_dict.clear()
-
+            num_batches = len(test_batches)
+            prev_time = float('-inf')
+            global_cnt = 0
+            
             for batch_size in test_batches:
                 if batch_size == 0: continue
                 dev.batch_size = batch_size
-
+                result = float('inf')
+                local_cnt = 0
+                
                 # build_time = time.time()
                 net, params, input_shape, output_shape = \
                     self.env.get_network(name=self.env.network, batch_size=dev.batch_size)
@@ -62,24 +68,23 @@ class Partitioner:
                 # build_time = time.time() - build_time
                 # print('<%s> build time: %.3f sec' % (dev.name, build_time))
 
-                result = dev.Run(graph, lib, params, input_shape, 
-                                self.env.test_times, 'test') / batch_size
+                while result > prev_time * self.test_thresh and local_cnt < self.test_limit:
+                    result = dev.Run(graph, lib, params, input_shape, 
+                                    self.env.test_times, 'test') / batch_size
+                    global_cnt += 1
+                    local_cnt += 1
+                    if global_cnt == 1: break
                 if result <= 0: break
+                prev_time = result
                 dev_dict[batch_size] = result
 
             self.perf_table[dev.name][self.env.network] = copy.deepcopy(dev_dict)
             print('%s (%s)\n%s' % (dev.name, self.env.network, dev_dict))
             new_devs += 1
 
-            bench_time = time.time() - bench_time
-            self.benchmark_time += bench_time
-
         if new_devs > 0:
-            bench_time = time.time()
             with open(self.table_path, 'wb') as table_file:
                 pickle.dump(self.perf_table, table_file)
-            bench_time = time.time() - bench_time
-            self.benchmark_time += bench_time
 
     def FindDev(self, attr):
         best_dev = None
@@ -153,7 +158,7 @@ class Partitioner:
         # print(offload_dev.name, dev_times, max_time)
 
         for dev_time in dev_times:
-            if dev_time > max_time * self.max_thresh:
+            if dev_time > max_time * self.part_thresh:
                 return
 
         offload_dev.trial = self.offload_trial
@@ -187,7 +192,7 @@ class Partitioner:
 
             max_time = self.EstimateDevTime(base_dev, base_dev.batch_size - 1)
 
-            self.offload_trial = tolerate_cnt + 1
+            self.offload_trial = 2**tolerate_cnt
             for dev in self.env.devices:
                 dev.trial = 0
                 dev.diff = float('-inf')
