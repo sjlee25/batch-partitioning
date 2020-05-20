@@ -2,6 +2,7 @@ import tvm
 from tvm import relay
 from tvm.contrib import graph_runtime
 from tvm.relay import testing
+from util import get_network
 import copy
 from math import floor, ceil, log2
 import numpy as np
@@ -62,7 +63,7 @@ class Partitioner:
                 
                 # build_time = time.time()
                 net, params, input_shape, output_shape = \
-                    self.env.get_network(name=self.env.network, batch_size=dev.batch_size)
+                    get_network(name=self.env.network, batch_size=dev.batch_size)
                 with relay.build_config(opt_level=self.env.opt_level):
                     graph, lib, params = relay.build(net, target=dev.target, params=params)
                 # build_time = time.time() - build_time
