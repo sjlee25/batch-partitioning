@@ -12,20 +12,19 @@ import threading
 import time
 
 class Partitioner:
-    def __init__(self, env):
+    def __init__(self, env, offload_thresh=1.05):
         self.env = env
         self.table_path = 'perf_table'
-        self.test_batches_cpu = [1, 2, 3, 4, 5, 7, 8, 9, 15, 16, 17, 31, 32, 33, 63, 64, 65]
         self.test_batches_gpu = [1, 2, 3, 4, 5, 7, 8, 9, 15, 16, 17, 31, 32, 33, 63, 64, 65, 127, 128, 129]
+        self.test_batches_cpu = self.test_batches_gpu[:-2] # max: 127
         self.perf_table = {}
         
         self.benchmark_time = 0.0
         self.offload_trial = 1
         self.tolerate_limit = 3
         self.base_var_limit = 5
-        self.test_limit = 5
-        self.test_thresh = 2.0
-        self.part_thresh = 1.05
+        self.test_limit = 3
+        self.offload_thresh = offload_thresh
         
     def CheckPerfTable(self):
         dev_dict = {}
@@ -53,6 +52,7 @@ class Partitioner:
             dev_dict.clear()
             num_batches = len(test_batches)
             prev_time = float('-inf')
+            prev_batch = 1
             global_cnt = 0
             
             for batch_size in test_batches:
@@ -69,14 +69,14 @@ class Partitioner:
                 # build_time = time.time() - build_time
                 # print('<%s> build time: %.3f sec' % (dev.name, build_time))
 
-                while result > prev_time * self.test_thresh and local_cnt < self.test_limit:
-                    result = dev.Run(graph, lib, params, input_shape, 
-                                    self.env.test_times, 'test') / batch_size
+                while result > prev_time * (batch_size / prev_batch) and local_cnt <= self.test_limit:
+                    result = dev.Run(graph, lib, params, input_shape, self.env.test_times, 'test') / batch_size
                     global_cnt += 1
                     local_cnt += 1
                     if global_cnt == 1: break
                 if result <= 0: break
                 prev_time = result
+                prev_batch = batch_size
                 dev_dict[batch_size] = result
 
             self.perf_table[dev.name][self.env.network] = copy.deepcopy(dev_dict)
@@ -159,7 +159,7 @@ class Partitioner:
         # print(offload_dev.name, dev_times, max_time)
 
         for dev_time in dev_times:
-            if dev_time > max_time * self.part_thresh:
+            if dev_time > max_time * self.offload_thresh:
                 return
 
         offload_dev.trial = self.offload_trial

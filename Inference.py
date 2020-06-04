@@ -4,7 +4,6 @@ from tvm.contrib import graph_runtime
 from util import get_network
 import argparse
 import copy
-import getopt
 from math import floor, ceil, log2
 import numpy as np
 import openpyxl
@@ -24,12 +23,19 @@ class Environment:
         self.run_times = 1
 
         self.log_path = log_path
+        self.std_batch = 1024
 
     def GetBatches(self):
         batches = []
         for dev in self.devices:
             batches.append(dev.batch_size)
         return batches
+
+    def GetMaxTime(self):
+        times = []
+        for dev in self.devices:
+            times.append(dev.exec_time)
+        return max(times)
 
 class Device:
     def __init__(self, dev_type='', idx=0):
@@ -105,22 +111,23 @@ class Device:
         if mode != 'test':
             self.PushResult()
 
-            if env.log_path != '':
-                if path.exists(env.log_path):
-                    book = openpyxl.load_workbook(env.log_path)
-                    if env.network in book:
-                        sheet = book[env.network]
-                    else: sheet = book.create_sheet(env.network)
-                else:
-                    book = openpyxl.Workbook()
-                    sheet = book.create_sheet(env.network)
+            # if env.log_path != '':
+            #     if path.exists(env.log_path):
+            #         book = openpyxl.load_workbook(env.log_path)
+            #         if env.network in book:
+            #             sheet = book[env.network]
+            #         else: sheet = book.create_sheet(env.network)
+            #     else:
+            #         book = openpyxl.Workbook()
+            #         sheet = book.create_sheet(env.network)
 
-                types = ['cpu', 'igpu', 'gpu']
-                idx = types.index(self.dev_type)
-                if self.dev_type == 'gpu': idx += self.idx
-                sheet[str(chr(idx + 65)) + str(env.batch_size)] = self.batch_size
-                sheet[str(chr(idx + 65 + len(env.devices))) + str(batch_size)] = self.exec_time
-                book.save(env.log_path)
+            #     types = ['cpu', 'igpu', 'gpu']
+            #     idx = types.index(self.dev_type)
+            #     if self.dev_type == 'gpu': idx += self.idx
+            #     sheet[str(chr(idx + 65)) + str(env.batch_size)] = self.batch_size
+            #     sheet[str(chr(idx + 65 + len(env.devices))) + str(batch_size)] = self.exec_time
+            #     # sheet[str(chr(idx + 65 + len(env.devices) * 2)) + str(batch_size)] = self.predict_time
+            #     book.save(env.log_path)
 
         return self.exec_time
 
@@ -219,6 +226,33 @@ if __name__ == '__main__':
         t.join()
 
     elapsed_time = time.time() - elapsed_time
+
+    if env.log_path != '':
+        if path.exists(env.log_path):
+            book = openpyxl.load_workbook(env.log_path)
+            if env.network in book:
+                sheet = book[env.network]
+            else: sheet = book.create_sheet(env.network)
+        else:
+            book = openpyxl.Workbook()
+            sheet = book.create_sheet(env.network)
+
+        row = str(int(env.batch_size/2))
+        for idx in range(len(env.devices)):
+            dev = env.devices[idx]
+            sheet[str(chr(idx + 65)) + row] = dev.batch_size
+            sheet[str(chr(idx + 65 + len(env.devices))) + row] = dev.exec_time
+            # sheet[str(chr(idx + 65 + len(env.devices) * 2)) + str(batch_size)] = self.predict_time
+
+        max_time = env.GetMaxTime()
+        sheet[str(chr(65 + len(env.devices)*2)) + row] = env.batch_size / max_time * 1000
+
+        # tmp code
+        gpu_time = partitioner.EstimateDevTime(env.devices[0], env.batch_size)
+        sheet[str(chr(65 + len(env.devices)*2 + 1)) + row] = (gpu_time - max_time) / gpu_time * 100
+        
+        book.save(env.log_path)
+    
     print(result)
     print('All elapsed time: %.2f sec' % (elapsed_time))
     print('Partitioning time: %.2f ms' % (div_time * 1000))
