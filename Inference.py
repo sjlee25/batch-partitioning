@@ -21,9 +21,7 @@ class Environment:
         self.opt_level = 3
         self.test_times = 1
         self.run_times = 1
-
         self.log_path = log_path
-        self.std_batch = 1024
 
     def GetBatches(self):
         batches = []
@@ -111,42 +109,26 @@ class Device:
         if mode != 'test':
             self.PushResult()
 
-            # if env.log_path != '':
-            #     if path.exists(env.log_path):
-            #         book = openpyxl.load_workbook(env.log_path)
-            #         if env.network in book:
-            #             sheet = book[env.network]
-            #         else: sheet = book.create_sheet(env.network)
-            #     else:
-            #         book = openpyxl.Workbook()
-            #         sheet = book.create_sheet(env.network)
-
-            #     types = ['cpu', 'igpu', 'gpu']
-            #     idx = types.index(self.dev_type)
-            #     if self.dev_type == 'gpu': idx += self.idx
-            #     sheet[str(chr(idx + 65)) + str(env.batch_size)] = self.batch_size
-            #     sheet[str(chr(idx + 65 + len(env.devices))) + str(batch_size)] = self.exec_time
-            #     # sheet[str(chr(idx + 65 + len(env.devices) * 2)) + str(batch_size)] = self.predict_time
-            #     book.save(env.log_path)
-
         return self.exec_time
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--network', type=str, choices=
-                        ['mobilenet', 'resnet-18', 'resnet-34', 'resnet-50',
-                        'vgg-16', 'vgg-19', 'inception_v3', 'densenet-121',
-                        'squeezenet_v1.0', 'squeezenet_v1.1'], 
-                        help='The name of neural network to inference')
+                        ['mobilenet', 'squeezenet_v1.0', 'squeezenet_v1.1', 'resnet-18', 'resnet-34',
+                        'resnet-50', 'inception_v3', 'vgg-16', 'vgg-19', 'densenet-121'], 
+                        help='Name of neural network model to use')
     parser.add_argument('--batch', type=int, help='Batch size')
     parser.add_argument('--device', type=str, default='gpu0',
-                        help='Devices to use, give as \'cpu\', \'igpu\' or \'gpu0\' successively')
-    parser.add_argument('--log', type=str, default='',
-                        help='File path for logging')
+                        help='Devices to use, write arguments as \'cpu\', \'igpu\' or \'gpu0\' successively')
+    parser.add_argument('--log', type=str, default='', help='File path for logging')
     args = parser.parse_args()
 
-    network = args.network
     batch_size = args.batch
+    if batch_size == 0:
+        parser.print_help(sys.stderr)
+        exit(1)
+
+    network = args.network
     arg_devs = list(args.device.split(','))
 
     devices = []
@@ -172,6 +154,8 @@ if __name__ == '__main__':
             if tvm.gpu(gpu_idx).exist:
                 gpus.append(Device('gpu', gpu_idx))
             else: print('[Error] Device \'%s\' is unrecognizable' % dev)
+        
+        else: print('[Error] Device \'%s\' is unrecognizable' % dev)
 
     # Add devices
     if cpu is not None:
@@ -183,7 +167,7 @@ if __name__ == '__main__':
     if len(gpus) > 0:
         devices.extend(gpus)
 
-    if batch_size == 0 or len(devices) == 0:
+    if len(devices) == 0:
         parser.print_help(sys.stderr)
         exit(1)
 
@@ -207,7 +191,7 @@ if __name__ == '__main__':
     if cpu_idx >= 0:
         env.devices.insert(len(env.devices)-1, env.devices.pop(cpu_idx))
 
-    result = ''
+    result = '[%s] batch: %d\n' % (env.network, env.batch_size)
     for dev in env.devices:
         if dev.batch_size == 0: continue
 
@@ -227,31 +211,29 @@ if __name__ == '__main__':
 
     elapsed_time = time.time() - elapsed_time
 
-    if env.log_path != '':
-        if path.exists(env.log_path):
-            book = openpyxl.load_workbook(env.log_path)
-            if env.network in book:
-                sheet = book[env.network]
-            else: sheet = book.create_sheet(env.network)
-        else:
-            book = openpyxl.Workbook()
-            sheet = book.create_sheet(env.network)
+    # temporary codes for logging
+    # if env.log_path != '':
+    #     if path.exists(env.log_path):
+    #         book = openpyxl.load_workbook(env.log_path)
+    #         if env.network in book:
+    #             sheet = book[env.network]
+    #         else: sheet = book.create_sheet(env.network)
+    #     else:
+    #         book = openpyxl.Workbook()
+    #         sheet = book.create_sheet(env.network)
 
-        row = str(int(env.batch_size/2))
-        for idx in range(len(env.devices)):
-            dev = env.devices[idx]
-            sheet[str(chr(idx + 65)) + row] = dev.batch_size
-            sheet[str(chr(idx + 65 + len(env.devices))) + row] = dev.exec_time
-            # sheet[str(chr(idx + 65 + len(env.devices) * 2)) + str(batch_size)] = self.predict_time
+    #     row = str(int(env.batch_size/2))
+    #     for idx in range(len(env.devices)):
+    #         dev = env.devices[idx]
+    #         sheet[str(chr(idx + 65)) + row] = dev.batch_size
+    #         sheet[str(chr(idx + 65 + len(env.devices))) + row] = dev.exec_time
 
-        max_time = env.GetMaxTime()
-        sheet[str(chr(65 + len(env.devices)*2)) + row] = env.batch_size / max_time * 1000
-
-        # tmp code
-        gpu_time = partitioner.EstimateDevTime(env.devices[0], env.batch_size)
-        sheet[str(chr(65 + len(env.devices)*2 + 1)) + row] = (gpu_time - max_time) / gpu_time * 100
+    #     max_time = env.GetMaxTime()
+    #     gpu_time = partitioner.EstimateDevTime(env.devices[0], env.batch_size)
+    #     sheet[str(chr(65 + len(env.devices)*2)) + row] = gpu_time
+    #     sheet[str(chr(65 + len(env.devices)*2 + 1)) + row] = gpu_time / max_time * 100
         
-        book.save(env.log_path)
+    #     book.save(env.log_path)
     
     print(result)
     print('All elapsed time: %.2f sec' % (elapsed_time))

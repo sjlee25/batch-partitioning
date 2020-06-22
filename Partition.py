@@ -12,7 +12,7 @@ import threading
 import time
 
 class Partitioner:
-    def __init__(self, env, offload_thresh=1.05):
+    def __init__(self, env, offload_thresh=1.00):
         self.env = env
         self.table_path = 'perf_table'
         self.test_batches_gpu = [1, 2, 3, 4, 5, 7, 8, 9, 15, 16, 17, 31, 32, 33, 63, 64, 65, 127, 128, 129]
@@ -87,35 +87,6 @@ class Partitioner:
             with open(self.table_path, 'wb') as table_file:
                 pickle.dump(self.perf_table, table_file)
 
-    def FindDev(self, attr):
-        best_dev = None
-        max_val = float('-inf')
-        min_val = float('inf')
-        
-        for dev in self.env.devices:
-            if attr == 'max_diff': # Max Value
-                if dev.diff >= max_val:
-                    best_dev = dev
-                    max_val = dev.diff
-
-            elif attr == 'base_init': # Min Time
-                dev_time = self.EstimateDevTime(dev, self.env.batch_size)
-                if dev_time < min_val:
-                    best_dev = dev
-                    min_val = dev_time
-            
-            elif attr == 'base_next': # Max Time
-                dev_time = self.EstimateDevTime(dev, dev.batch_size)
-                if dev_time > max_val:
-                    best_dev = dev
-                    max_val = dev_time
-
-            else:
-                print('[Error] Unknown Attribute %s in FindDev' % (attr))
-                _exit(1)
-
-        return best_dev
-
     def EstimateDevTime(self, dev, batch_size):
         if batch_size == 0:
             return 0
@@ -138,6 +109,35 @@ class Partitioner:
         yp = [dev_perf[xp[0]], dev_perf[xp[1]]]
         return np.interp(batch_size, xp, yp) * batch_size
 
+    def GetMaxDiffDev(self):
+        ret_dev = None
+        max_val = float('-inf')
+        for dev in self.env.devices:
+            if dev.diff >= max_val:
+                ret_dev = dev
+                max_val = dev.diff
+        return ret_dev
+
+    def GetInitBaseDev(self):
+        ret_dev = None
+        min_val = float('inf')
+        for dev in self.env.devices:
+            dev_time = self.EstimateDevTime(dev, self.env.batch_size)
+            if dev_time < min_val:
+                ret_dev = dev
+                min_val = dev_time
+        return ret_dev
+
+    def GetNextBaseDev(self):
+        ret_dev = None
+        max_val = float('-inf')
+        for dev in self.env.devices:
+            dev_time = self.EstimateDevTime(dev, self.env.batch_size)
+            if dev_time > max_val:
+                ret_dev = dev
+                max_val = dev_time
+        return ret_dev
+
     def OffloadDev(self, offload_dev, base_dev, max_time):
         if self.offload_trial > base_dev.batch_size:
             return
@@ -156,8 +156,6 @@ class Partitioner:
                 off_dev_time = eval_time
             dev_times.append(eval_time)
 
-        # print(offload_dev.name, dev_times, max_time)
-
         for dev_time in dev_times:
             if dev_time > max_time * self.offload_thresh:
                 return
@@ -174,7 +172,7 @@ class Partitioner:
         for dev in self.env.devices:
             dev.batch_size = 0
 
-        base_dev = self.FindDev('base_init')
+        base_dev = self.GetInitBaseDev()
         base_dev.batch_size = self.env.batch_size
 
         cnt = 0
@@ -187,7 +185,7 @@ class Partitioner:
             loop_time = time.time()
             
             if cnt > 0 and tolerate_cnt > self.tolerate_limit:
-                base_dev = self.FindDev('base_next')
+                base_dev = self.GetNextBaseDev()
                 base_var_cnt += 1
                 tolerate_cnt = 0
 
@@ -211,7 +209,7 @@ class Partitioner:
                     if dev == base_dev: continue
                     self.OffloadDev(dev, base_dev, max_time)
 
-            offload_dev = self.FindDev('max_diff')
+            offload_dev = self.GetMaxDiffDev()
             if offload_dev is None: break
             offloaded_cnt = offload_dev.trial
 
@@ -224,7 +222,6 @@ class Partitioner:
             cnt += 1
             loop_time = time.time() - loop_time
             print("[%2d]" % (cnt), self.env.GetBatches(), "%.2f ms" % (loop_time * 1000))
-            # print('')
 
             if base_dev.batch_size == 1:
                 break
