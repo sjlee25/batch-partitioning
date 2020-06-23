@@ -6,6 +6,8 @@ import argparse
 import numpy as np
 import sys
 import time
+import openpyxl
+from os import path
 # from Inference import Environment, Device
 from Inference import Environment
 
@@ -20,7 +22,7 @@ if __name__ == '__main__':
     parser.add_argument('--batch', type=int, help='Batch size')
     parser.add_argument('--max_batch', type=int, default=0, help='Max batch size for iterating check')
     parser.add_argument('--inc', type=int, default=0, help='Increment of batch size for iterating check')
-    # parser.add_argument('--log', type=str, default='', help='File path for logging')
+    parser.add_argument('--log', type=str, default='', help='File path for logging')
     args = parser.parse_args()
 
     batch_size = args.batch
@@ -72,7 +74,7 @@ if __name__ == '__main__':
 
     while batch_size <= max_batch:
         # env = Environment(network, batch_size, [dev], '')
-        env = Environment(network, batch_size, [], '')
+        env = Environment(network, batch_size, [], args.log)
         
         # build graph
         net, params, input_shape, output_shape = \
@@ -82,16 +84,12 @@ if __name__ == '__main__':
             graph, lib, params = relay.build(net, target=target, params=params)
         # module = graph_runtime.create(graph, lib, dev.ctx)
         module = graph_runtime.create(graph, lib, ctx)
+        data = tvm.nd.array((np.random.uniform(size=input_shape)).astype('float32'))
         
         # input time
         input_time = time.time()
-        param_list = []
-        for key, val in params.items():
-            param_list.append(val.asnumpy())
-        for p in param_list:
-            # tvm.nd.array(p, ctx=dev.ctx)
-            tvm.nd.array(p, ctx=ctx)
-            # print(p.shape)
+        module.set_input('data', data, **params)
+        ctx.sync()
         input_time = (time.time() - input_time) * 1000 # ms
 
         # output time
@@ -99,7 +97,24 @@ if __name__ == '__main__':
         module.get_output(0)
         output_time = (time.time() - output_time) * 1000 # ms
 
-        print('input : %8.3f ms\noutput: %8.3f ms\n' % (input_time, output_time))
+        print('input : %7.3f ms\noutput: %7.3f ms\n' % (input_time, output_time))
+
+        if env.log_path != '':
+            if path.exists(env.log_path):
+                book = openpyxl.load_workbook(env.log_path)
+                if env.network in book:
+                    sheet = book[env.network]
+                else: sheet = book.create_sheet(env.network)
+            else:
+                book = openpyxl.Workbook()
+                sheet = book.create_sheet(env.network)
+
+            row = str(int(env.batch_size/10))
+            sheet[str(chr(65)) + row] = batch_size
+            sheet[str(chr(65 + 1)) + row] = input_time
+            sheet[str(chr(65 + 2)) + row] = output_time
+
+            book.save(env.log_path)
 
         if increment > 0: batch_size += increment
         else: break
