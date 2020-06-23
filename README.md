@@ -19,6 +19,7 @@ device: ['cpu', 'igpu', 'gpu0', 'gpu1', ...]
 batch: any positive integer value within a executable range
 ```
 
+- **To execute it, some codes in TVM framework must be modified (guidelines will be given later here)**
 - You can choose one inference network model in the list above.
 - For device argument, write all devices to use successively, '--device=cpu,igpu,gpu0,gpu1' for example.
 - Partitioned batch sizes must be executable on each device.
