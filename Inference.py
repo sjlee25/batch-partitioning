@@ -1,3 +1,11 @@
+'''
+--- needed updates (20.7.19) ---
+  1) Dynamic device allocation
+  2) Use threads to do testing more faster
+    - if CPU is not used, then sequential builds are no matter
+    - else, execute with CPU then builds need to be scheduled
+'''
+
 import tvm
 from tvm import relay
 from tvm.contrib import graph_runtime
@@ -11,7 +19,7 @@ from os import path,_exit
 import sys
 import threading
 import time
-from Partition import Partitioner
+from Partition import Partitioner, PerfInfo
 
 class Environment:
     def __init__(self, network, batch_size, devices, log_path=''):
@@ -23,33 +31,33 @@ class Environment:
         self.run_times = 1
         self.log_path = log_path
 
-    def GetBatches(self):
+    def getBatches(self):
         batches = []
         for dev in self.devices:
             batches.append(dev.batch_size)
         return batches
 
-    def GetMaxTime(self):
+    def getMaxTime(self):
         times = []
         for dev in self.devices:
-            times.append(dev.exec_time)
+            times.append(dev.result_time.getTime())
         return max(times)
 
 class Device:
     def __init__(self, dev_type='', idx=0):
         self.dev_type = dev_type
         self.idx = idx
-        self.GetDevInfo()
-
         self.batch_size = 0
-        self.exec_time = 0.0
-        self.predict_time = 0.0
+        self.result_time = None
+        self.predict_time = None
 
         self.eval_time = 0.0
         self.trial = 0
         self.diff = 0.0
 
-    def GetDevInfo(self):
+        self.getDevInfo()
+
+    def getDevInfo(self):
         if self.dev_type == 'cpu':
             self.ctx = tvm.cpu(self.idx)
             # self.target = 'llvm'
@@ -79,15 +87,16 @@ class Device:
 
         self.name = '[%s] '%(self.dev_type.upper()) + dev_name
 
-    def PushResult(self):
+    def pushResult(self):
         global result
-        string = '%4s %d = %7.2f ms' % (self.dev_type.upper(), self.idx, self.exec_time)
+        string = '%4s %d = %7.2f ms (%6.2f ms)' % (self.dev_type.upper(), self.idx, \
+            self.result_time.exec_time + self.result_time.io_time, self.result_time.io_time)
         if self.predict_time > 0:
             string += ' | %7.2f ms' % (self.predict_time)
         string += ' [%3d]\n' % (self.batch_size)
         result += string
 
-    def Run(self, graph, lib, params, input_shape, repeat_time=1, mode=''):
+    def run(self, graph, lib, params, input_shape, repeat_time=1, mode=''):
         global env, result
         if self.batch_size == 0:
             result += '%s %d = 0 batch\n' % (self.dev_type, self.idx)
@@ -98,18 +107,32 @@ class Device:
             dev_type = self.dev_type.upper()
             print('\n[Error] Executing with %s (%s %d) failed'
                 % (self.name.replace('[%s] '%(dev_type), ''), dev_type, self.idx))
-            if mode == 'test': return -1
+            if mode == 'test': return -1, -1
             else: _exit(1)
 
         data = tvm.nd.array((np.random.uniform(size=input_shape)).astype('float32'))
-        module.set_input('data', data, **params)
+
+        # measure input time
+        input_time = time.time()
+        module.set_input('data', data)
+        self.ctx.sync()
+        input_time = time.time() - input_time
+        module.set_input(**params)
+
         timer = module.module.time_evaluator('run', self.ctx, number=1, repeat=repeat_time)
+        exec_time = np.mean(np.array(timer().results)) * 1000
 
-        self.exec_time = np.mean(np.array(timer().results)) * 1000
-        if mode != 'test':
-            self.PushResult()
+        # measure output time
+        output_time = time.time()
+        module.get_output(0)
+        self.ctx.sync()
+        output_time = time.time() - output_time
 
-        return self.exec_time
+        io_time = (input_time + output_time) * 1000
+        self.result_time = PerfInfo(exec_time, io_time)
+
+        if mode != 'test': self.pushResult()
+        return exec_time, io_time
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -167,22 +190,28 @@ if __name__ == '__main__':
     if len(gpus) > 0:
         devices.extend(gpus)
 
+    # Check added devices
     if len(devices) == 0:
         parser.print_help(sys.stderr)
         exit(1)
 
+    # Set environment
     env = Environment(network, batch_size, devices, args.log)
+
     threads = []
+    result = ''
     elapsed_time = time.time()
     div_time = 0.0
     
+    # Skip partition for just one device
     if len(env.devices) == 1:
         env.devices[0].batch_size = batch_size
 
+    # Start partition
     else:
         div_time = time.time()
         partitioner = Partitioner(env)
-        partitioner.StartPartition()
+        partitioner.startPartition()
         div_time = time.time() - div_time - partitioner.benchmark_time
 
     # Schedule build order for effective sequential builds
@@ -203,7 +232,8 @@ if __name__ == '__main__':
         # build_time = time.time() - build_time
         # print('<%s> build time: %.3f sec' % (dev.name, build_time))
 
-        t = threading.Thread(target=dev.Run, args=(graph, lib, params, input_shape, env.run_times))
+        # Create threads then do run
+        t = threading.Thread(target=dev.run, args=(graph, lib, params, input_shape, env.run_times))
         threads.append(t)
         t.start()
     for t in threads:
@@ -212,29 +242,30 @@ if __name__ == '__main__':
     elapsed_time = time.time() - elapsed_time
 
     # temporary codes for logging
-    # if env.log_path != '':
-    #     if path.exists(env.log_path):
-    #         book = openpyxl.load_workbook(env.log_path)
-    #         if env.network in book:
-    #             sheet = book[env.network]
-    #         else: sheet = book.create_sheet(env.network)
-    #     else:
-    #         book = openpyxl.Workbook()
-    #         sheet = book.create_sheet(env.network)
+    if env.log_path != '':
+        if path.exists(env.log_path):
+            book = openpyxl.load_workbook(env.log_path)
+            if env.network in book:
+                sheet = book[env.network]
+            else: sheet = book.create_sheet(env.network)
+        else:
+            book = openpyxl.Workbook()
+            sheet = book.create_sheet(env.network)
 
-    #     row = str(int(env.batch_size/2))
-    #     for idx in range(len(env.devices)):
-    #         dev = env.devices[idx]
-    #         sheet[str(chr(idx + 65)) + row] = dev.batch_size
-    #         sheet[str(chr(idx + 65 + len(env.devices))) + row] = dev.exec_time
+        # row = str(int(env.batch_size/2))
+        row = str(len(env.devices))
+        for idx in range(len(env.devices)):
+            dev = env.devices[idx]
+            sheet[str(chr(idx + 65)) + row] = dev.batch_size
+            sheet[str(chr(idx + 65 + len(env.devices))) + row] = dev.result_time.getSummedTime()
 
-    #     max_time = env.GetMaxTime()
-    #     gpu_time = partitioner.EstimateDevTime(env.devices[0], env.batch_size)
-    #     sheet[str(chr(65 + len(env.devices)*2)) + row] = gpu_time
-    #     sheet[str(chr(65 + len(env.devices)*2 + 1)) + row] = gpu_time / max_time * 100
+        max_time = env.getMaxTime()
+        gpu_time = partitioner.estimateDevTime(env.devices[0], env.batch_size)
+        sheet[str(chr(65 + len(env.devices)*2)) + row] = gpu_time
+        sheet[str(chr(65 + len(env.devices)*2 + 1)) + row] = gpu_time / max_time * 100
         
-    #     book.save(env.log_path)
+        book.save(env.log_path)
     
     print(result)
     print('All elapsed time: %.2f sec' % (elapsed_time))
-    print('Partitioning time: %.2f ms' % (div_time * 1000))
+    print('Partitioning time: %.2f sec' % (div_time))

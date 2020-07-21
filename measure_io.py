@@ -1,15 +1,38 @@
 import tvm
-from tvm import relay
-from tvm.contrib import graph_runtime
+from tvm import relay, rpc
+from tvm.contrib import graph_runtime, util
 from util import get_network
 import argparse
 import numpy as np
 import sys
 import time
 import openpyxl
-from os import path
+from os import path, _exit
+import threading
 # from Inference import Environment, Device
 from Inference import Environment
+
+def connectRPC(ctx, remote, graph, lib, params, data):
+    global input_time, output_time
+
+    temp = util.tempdir()
+    path = temp.relpath('lib.tar')
+    lib.export_library(path)
+    remote.upload(path)
+
+    LIB = remote.load_module('lib.tar')
+    module = graph_runtime.create(graph, LIB, ctx)
+    # module.set_input(**params)
+
+    input_time = time.time()
+    module.set_input('data', data)
+    ctx.sync()
+    input_time = (time.time() - input_time) * 1000 # ms
+
+    output_time = time.time()
+    module.get_output(0)
+    ctx.sync()
+    output_time = (time.time() - output_time) * 1000 # ms
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -37,7 +60,9 @@ if __name__ == '__main__':
 
     network = args.network
     dev = args.device
-
+    input_time = output_time = 0.
+    use_rpc = False
+    
     # Check if device is available
     if dev == 'cpu':
         if tvm.cpu(0).exist:
@@ -68,6 +93,16 @@ if __name__ == '__main__':
             print('[Error] Device \'%s\' is unrecognizable' % dev)
             exit(1)
 
+    elif dev == 'rpc':
+        use_rpc = True
+        host = '166.104.144.16'
+        port = 4123
+        
+        remote = rpc.connect(host, port)
+        ctx = remote.gpu(0)
+        target = 'cuda'
+        target_host = 'cuda'
+
     else:
         print('[Error] Device \'%s\' is unrecognizable' % dev)
         exit(1)
@@ -79,23 +114,37 @@ if __name__ == '__main__':
         # build graph
         net, params, input_shape, output_shape = \
             get_network(name=env.network, batch_size=env.batch_size)
-        with relay.build_config(opt_level=env.opt_level):
-            # graph, lib, params = relay.build(net, target=dev.target, params=params)
-            graph, lib, params = relay.build(net, target=target, params=params)
-        # module = graph_runtime.create(graph, lib, dev.ctx)
-        module = graph_runtime.create(graph, lib, ctx)
         data = tvm.nd.array((np.random.uniform(size=input_shape)).astype('float32'))
         
-        # input time
-        input_time = time.time()
-        module.set_input('data', data, **params)
-        ctx.sync()
-        input_time = (time.time() - input_time) * 1000 # ms
+        if use_rpc:
+            with relay.build_config(opt_level=env.opt_level):
+                graph, lib, params = relay.build(net, target=target, target_host=target_host, params=params)
 
-        # output time
-        output_time = time.time()
-        module.get_output(0)
-        output_time = (time.time() - output_time) * 1000 # ms
+            rpc_thread = threading.Thread(connectRPC, args=(ctx, remote, graph, lib, params, data))
+            rpc_thread.start()
+            rpc_thread.join()
+
+        else:
+            with relay.build_config(opt_level=env.opt_level):
+                # graph, lib, params = relay.build(net, target=dev.target, params=params)
+                graph, lib, params = relay.build(net, target=target, params=params)
+
+            # module = graph_runtime.create(graph, lib, dev.ctx)
+            module = graph_runtime.create(graph, lib, ctx)
+            # module.set_input(**params)
+
+            # input time
+            input_time = time.time()
+            module.set_input('data', data)
+            module.set_input(**params)
+            ctx.sync()
+            input_time = (time.time() - input_time) * 1000 # ms
+
+            # output time
+            output_time = time.time()
+            module.get_output(0)
+            ctx.sync()
+            output_time = (time.time() - output_time) * 1000 # ms
 
         print('input : %7.3f ms\noutput: %7.3f ms\n' % (input_time, output_time))
 

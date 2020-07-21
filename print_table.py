@@ -1,19 +1,18 @@
 import pickle
 import sys
+from Partition import PerfInfo
 
-file = open(sys.argv[1], 'rb')
-table = pickle.load(file)
+for i in range(1, len(sys.argv)):
+    file = open(sys.argv[i], 'rb')
+    table = pickle.load(file)
 
-for dev in table:
-    print('Device: %s' % (dev))
-    dev_dict = table[dev]
-    net_list = list(dev_dict.keys())
-    net_list.sort()
+    for dev in table:
+        print('Device: %s' % (dev))
+        dev_dict = table[dev]
 
-    for net in net_list:
-        print('  Network: %s' % (net))
-        keys = sorted(dev_dict[net].keys())
-        for i in keys:
-            print('    [%3d] %6.2f ms/batch' % (i, dev_dict[net][i]))
+        for batch in dev_dict:
+            perf_info = dev_dict[batch]
+            print('    [%3d] %8.2f ms  (i/o: %7.2f ms)' 
+                % (batch, perf_info.exec_time*batch, perf_info.io_time*batch))
+
         print()
-
