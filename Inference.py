@@ -91,7 +91,7 @@ class Device:
         global result
         string = '%4s %d = %7.2f ms (%6.2f ms)' % (self.dev_type.upper(), self.idx, \
             self.result_time.exec_time + self.result_time.io_time, self.result_time.io_time)
-        if self.predict_time > 0:
+        if self.predict_time is not None:
             string += ' | %7.2f ms' % (self.predict_time)
         string += ' [%3d]\n' % (self.batch_size)
         result += string

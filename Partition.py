@@ -127,12 +127,12 @@ class Partitioner:
         yp_exec = [dev_perf[xp[0]].exec_time, dev_perf[xp[1]].exec_time]
 
         intp_time = np.interp(batch_size, xp, yp_exec) * batch_size
+        intp_io_time = 0.
         if self.with_io_time:
             yp_io = [dev_perf[xp[0]].io_time, dev_perf[xp[1]].io_time]
             intp_io_time = np.interp(batch_size, xp, yp_io) * batch_size
-            intp_time += intp_io_time
 
-        return intp_time
+        return intp_time + intp_io_time
 
     def getMaxDiffDev(self):
         ret_dev = None
