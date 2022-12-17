@@ -25,7 +25,7 @@
 
 #### 제안
 
-<img src="./images/framework.pdf" alt="제안 구조" style="width:720px;" />
+<img src="./images/framework.png" alt="제안 구조" style="width:720px;" />
 
 - 대상 모델 및 각 연산 유닛 별로 특정 배치 크기에 대한 성능 프로파일링 진행 후 성능 표에 기록합니다.
   - 이때, 효율이 비교적 크게 변할 수 있는 $2^n$ 형태의 값과 그 근처의 값들의 배치 크기를 대상으로 프로파일링을 진행합니다.
@@ -37,7 +37,7 @@
 
 #### 결과
 
-<p align="center"><img src="./images/result.pdf" alt="실험 결과" style="width: 420px;" /></p>
+<p align="center"><img src="./images/result.png" alt="실험 결과" style="width: 420px;" /></p>
 
 - 1050 Ti GPU 단독 활용 시 대비 i7-9700K CPU 및 이에 내장된 UHD630 iGPU와 GPU를 함께 활용할 때 특정 배치 크기에서의 처리량을 비교하고자 했습니다.
 - MobileNet, ResNet-50, VGG-16 세 모델의 배치 크기를 100으로 설정하여 추론에 총 소요된 시간을 측정했습니다.
