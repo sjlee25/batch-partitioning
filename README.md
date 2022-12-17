@@ -4,7 +4,7 @@
 
 ([이성주, 최경환, & 박영준. (2020). 이종 시스템에서의 효율적인 추론을 위한 성능 기반 배치 분배 기법 연구. *한국정보과학회 학술발표논문집*, 1745-1747.](https://www.dbpia.co.kr/pdf/pdfView.do?nodeId=NODE09874908&googleIPSandBox=false&mark=0&useDate=&ipRange=false&accessgl=Y&language=ko_KR&hasTopBanner=true))
 
-
+<br/>
 
 ### 목차
 
@@ -12,7 +12,7 @@
 2. [코드 설명](#코드-설명)
 3. [코멘트](#코멘트)
 
-
+<br/>
 
 ### 연구 개요
 
@@ -21,7 +21,7 @@
 - 모델 규모 및 기기 성능에 따라 딥러닝 모델 추론 시 오랜 시간이 소요 되면 실시간 처리 애플리케이션의 요구사항을 충족하기 어려울 수 있습니다.
 - 워크로드 일부를 분배하여 이종 시스템 환경에서 유휴 상태에 있는 다른 연산 유닛들을 함께 활용하면 작업 효율을 증대시킬 수 있습니다.
 
-
+<br/>
 
 #### 제안
 
@@ -33,39 +33,37 @@
 - 연산 유닛 별로 분배된 배치 크기에 따라 TVM 딥러닝 컴파일러를 활용해 플랫폼 별 모델 컴파일 진행 및 병렬 수행합니다.
   - 각 유닛에 대해 CPU는 LLVM, iGPU는 OpenCL, GPU는 CUDA 백엔드를 활용하도록 지정합니다.
 
-
+<br/>
 
 #### 결과
 
-<img src="./images/result.png" alt="실험 결과" style="zoom: 30%;" />
+<img src="./images/result.png" alt="실험 결과" style="zoom: 20%;" />
 
 - 1050 Ti GPU 단독 활용 시 대비 i7-9700K CPU 및 이에 내장된 UHD630 iGPU와 GPU를 함께 활용할 때 특정 배치 크기에서의 처리량을 비교하고자 했습니다.
 - MobileNet, ResNet-50, VGG-16 세 모델의 배치 크기를 100으로 설정하여 추론에 총 소요된 시간을 측정했습니다.
 - 세 이종 연산 유닛에 데이터 병렬화 기법을 적용해 추론 소요 시간이 모델 별로 약 12~42% 가량 감소한 것을 확인했습니다.
 
-
+<br/>
 
 ### 코드 설명
 
 #### 테스트 환경
 
 - H/W
-
   - CPU: Intel i7-9700K
   - iGPU: Intel UHD630
   - GPU: NVIDIA GTX 1050 Ti
   - RAM: DDR4 16GB
 
-  
+<br/>
 
 - S/W
-
   - Ubuntu 18.04 LTS
   - Python 3.7
   - TVM 0.7.0dev0
   - LLVM, OpenCL (Intel), CUDA
 
-
+<br/>
 
 #### Inference.py
 
@@ -83,7 +81,7 @@
   - 0.8.0 버전 이후에서는 빌드 전  `tvm.autotvm.measure.measure_methods` 모듈 내 ``set_cuda_target_arch(arch)`` 메소드를 호출해 대상 아키텍처를 지정합니다.
   - NVCC를 활용할 경우 0번 GPU의 아키텍처를 기반으로 코드를 컴파일하도록 작성된 백엔드 코드를, 장착된 GPU 중 가장 낮은 아키텍처를 감지하도록 수정합니다.
 
-
+<br/>
 
 #### print_table.py
 
@@ -95,7 +93,7 @@
 
 - 기록된 성능 표의 일부분을 수정할 수 있는 일부 메소드를 제공합니다. (기능 상 미완성)
 
-
+<br/>
 
 #### measure_io.py
 
@@ -111,7 +109,7 @@
   - `--inc`: 한 번의 실행으로 여러 배치 크기에 대해 프로파일링 하기 위한 배치 크기 증분 값 (기본 0)
   - `--max_batch`: 증분 값을 적용할 때 지정할 최대 배치 크기
 
-
+<br/>
 
 ### 코멘트
 
@@ -124,7 +122,7 @@
   - 모바일 환경 및 배치 크기 별로 비전 모델 추론 시 지연 시간과 처리량의 경향을 분석한 연구
     - [Hanhirova, J., Kämäräinen, T., Seppälä, S., Siekkinen, M., Hirvisalo, V., & Ylä-Jääski, A. (2018, June). Latency and throughput characterization of convolutional neural networks for mobile computer vision. In *Proceedings of the 9th ACM Multimedia Systems Conference* (pp. 204-215).](https://dl.acm.org/doi/abs/10.1145/3204949.3204975)
 
-
+<br/>
 
 #### 개선 의견
 
