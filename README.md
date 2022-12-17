@@ -37,7 +37,7 @@
 
 #### 결과
 
-<img src="./images/result.png" alt="실험 결과" style="width: 420px;" />
+<img src="./images/result.png" alt="실험 결과" style="width: 420px; align: center;" />
 
 - 1050 Ti GPU 단독 활용 시 대비 i7-9700K CPU 및 이에 내장된 UHD630 iGPU와 GPU를 함께 활용할 때 특정 배치 크기에서의 처리량을 비교하고자 했습니다.
 - MobileNet, ResNet-50, VGG-16 세 모델의 배치 크기를 100으로 설정하여 추론에 총 소요된 시간을 측정했습니다.
