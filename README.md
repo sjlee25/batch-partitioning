@@ -87,7 +87,7 @@
 - ``Inference.py``를 실행함으로써 작성된 성능 표를 출력하며, 다음과 같이 프로파일링 정보가 기록된 파일명을 인자로 제공해 실행합니다.
 
   ```bash
-  python3 print_table.py perf_table
+  python3 print_table.py [table file name]
   ```
 
 - 기록된 성능 표의 일부분을 수정할 수 있는 일부 메소드를 제공합니다. (기능 상 미완성)
